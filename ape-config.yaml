@@ -1,0 +1,46 @@
+name: v1-liquidator-bot
+
+plugins:
+  - name: alchemy
+    version: 0.7.1
+  - name: etherscan
+    version: 0.7.1
+  - name: solidity
+    version: 0.7.1
+  - name: foundry
+    version: 0.7.3
+  - name: arbitrum
+    version: 0.7.2
+  - name: base
+    version: 0.7.1
+
+default_ecosystem: ethereum
+
+ethereum:
+  default_network: goerli
+  mainnet_fork:
+    default_provider: foundry
+
+foundry:
+  fork:
+    ethereum:
+      mainnet:
+        upstream_provider: alchemy
+      goerli:
+        upstream_provider: alchemy
+      sepolia:
+        upstream_provider: alchemy
+    base:
+      mainnet:
+        upstream_provider: alchemy
+
+dependencies:
+  - name: marginal-v1-core
+    github: MarginalProtocol/v1-core
+    ref: v1.0.0-rc.4
+  - name: marginal-v1-periphery
+    github: MarginalProtocol/v1-periphery
+    ref: v1.0.0-beta.10
+
+solidity:
+  via_ir: true

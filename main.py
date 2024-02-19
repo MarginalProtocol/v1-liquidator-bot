@@ -17,11 +17,27 @@ START_BLOCK = os.environ.get("START_BLOCK", None)
 if START_BLOCK is not None:
     START_BLOCK = int(START_BLOCK)
 
+# Maximum fraction of gas limit to use for multicall liquidations expressed as denominator
+GAS_LIQUIDATE = 150_000
+MAX_FRACTION_GAS_LIMIT_DENOMINATOR = os.environ.get(
+    "MAX_FRACTION_GAS_LIMIT_DENOMINATOR", 6
+)
+
+# Recipient of liquidation rewards
+RECIPIENT_ADDRESS = os.environ.get("RECIPIENT_ADDRESS", None)
+
 # Do this to initialize your app
 app = SilverbackApp()
 
 # Nonfungible position manager contract
 manager = Contract(os.environ["CONTRACT_ADDRESS_MRGLV1_NFT_MANAGER"])
+
+# Example pool contract
+pool_example = Contract(os.environ["CONTRACT_ADDRESS_MRGLV1_POOL_EXAMPLE"])
+
+# Multicall (mds1)
+# @dev Ref @mds1/multicall/src/Multicall3.sol
+multicall3 = Contract("0xcA11bde05977b3631167028862bE2a173976CA11")
 
 
 # Calculates the health factor for a position
@@ -103,6 +119,20 @@ def _get_token_ids_in_db(context: Annotated[Context, TaskiqDepends()]) -> List[i
     return context.state.db.index.to_list()
 
 
+# Gets a list of unsafe and profitable to liquidate positions from db, returning df records {"index": {"column": "value"}}
+def _get_liquidatable_position_records_from_db(
+    min_rewards: int, max_records: int, context: Annotated[Context, TaskiqDepends()]
+) -> Dict:
+    # TODO: accomodate non-manager positions in bot via owner != manager.address
+    db_filtered = context.state.db[
+        (~context.state.db["safe"]) & (context.state.db["rewards"] >= min_rewards)
+    ].head(max_records)
+    click.echo(
+        f"Liquidatable positions > min rewards of {min_rewards} with max records of {max_records}: {db_filtered}"
+    )
+    return db_filtered.to_dict(orient="index")
+
+
 @app.on_startup()
 def app_startup(startup_state: SilverbackStartupState):
     # TODO: process_history(start_block=startup_state.last_block_seen)
@@ -114,14 +144,63 @@ def app_startup(startup_state: SilverbackStartupState):
 def worker_startup(state: TaskiqState):
     state.block_count = 0
     state.db = pd.DataFrame()  # in memory DB for now
+    state.recipient = (
+        RECIPIENT_ADDRESS if RECIPIENT_ADDRESS is not None else app.signer.address
+    )
+    state.signer_balance = app.signer.balance
     return {"message": "Worker started."}
+
+
+# Profitably liquidates unsafe positions on pools via multicall, returning list of tokenIds liquidated
+def liquidate_positions(
+    block: BlockAPI, context: Annotated[Context, TaskiqDepends()]
+) -> List[int]:
+    min_rewards = app.provider.base_fee * GAS_LIQUIDATE
+    max_gas_limit = app.provider.max_gas // MAX_FRACTION_GAS_LIMIT_DENOMINATOR
+    max_records = max_gas_limit // GAS_LIQUIDATE
+    click.echo(f"Min rewards at block {block.number}: {min_rewards}")
+    click.echo(f"Max records at block {block.number}: {max_records}")
+
+    records = _get_liquidatable_position_records_from_db(
+        min_rewards, max_records, context
+    )
+    token_ids = list(records.keys())
+    click.echo(f"Liquidating positions with tokenIds: {token_ids}")
+    if len(token_ids) == 0:
+        return token_ids
+
+    # format into multicall3 calldata: (address target, bool allowFailure, bytes callData)
+    # each calls to pool.liquidate(address recipient, address owner, uint96 id)
+    calldata = [
+        (
+            record["pool"],
+            False,
+            pool_example.liquidate.as_transaction(
+                context.state.recipient, manager.address, record["positionId"]
+            ).data,
+        )
+        for _, record in records.items()
+    ]
+
+    # preview before sending in case of revert
+    try:
+        multicall3.aggregate3.estimate_gas_cost(calldata, sender=app.signer)
+        multicall3.aggregate3(calldata, sender=app.signer)
+    except ContractLogicError as err:
+        # didn't liquidate any positions so reset tokenIds returned to empty
+        click.secho(
+            f"Contract logic error when estimating gas: {err}", blink=True, bold=True
+        )
+        token_ids = []
+
+    return token_ids
 
 
 # This is how we trigger off of new blocks
 @app.on_(chain.blocks)
 # context must be a type annotated kwarg to be provided to the task
 def exec_block(block: BlockAPI, context: Annotated[Context, TaskiqDepends()]):
-    # TODO: chunk?
+    # TODO: chunk query?
     token_ids = _get_token_ids_in_db(context)
     click.echo(
         f"Fetching position updates at block {block.number} for tokenIds: {token_ids}"
@@ -146,6 +225,19 @@ def exec_block(block: BlockAPI, context: Annotated[Context, TaskiqDepends()]):
     )
     _update_positions_in_db(entries_updated, context)
 
+    # multicall liquidate calls to chain
+    token_ids_liquidated = liquidate_positions(block, context)
+
+    # remove additional successful liquidations caused by bot from db
+    entries_liquidated_by_bot = list(
+        filter(lambda e: (e[0] in token_ids_liquidated), entries_updated)
+    )
+    click.echo(
+        f"Liquidated by bot entries tokenIds to delete from DB: {[token_id for token_id, _ in entries_liquidated_by_bot]}"
+    )
+    _delete_positions_from_db(entries_liquidated_by_bot, context)
+
+    context.state.signer_balance = app.signer.balance
     context.state.block_count += 1
     return len(block.transactions)
 

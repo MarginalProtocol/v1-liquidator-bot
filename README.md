@@ -27,7 +27,7 @@ and the address of an example [`MarginalV1Pool`](https://github.com/MarginalProt
 
 ```sh
 export CONTRACT_ADDRESS_MARGV1_NFT_MANAGER=<address of nft manager contract on network>
-export CONTRACT_ADDRESS_MARGV1_POOL_EXAMPLE=<address of mrgl v1 pool example contract on network>
+export CONTRACT_ADDRESS_MARGV1_POOL_EXAMPLE=<address of marginal v1 pool example contract on network>
 ```
 
 The latter is only used to more easily construct transaction calldata with `ape`, so can be any pool.

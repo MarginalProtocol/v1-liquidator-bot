@@ -30,10 +30,10 @@ RECIPIENT_ADDRESS = os.environ.get("RECIPIENT_ADDRESS", None)
 app = SilverbackApp()
 
 # Nonfungible position manager contract
-manager = Contract(os.environ["CONTRACT_ADDRESS_MRGLV1_NFT_MANAGER"])
+manager = Contract(os.environ["CONTRACT_ADDRESS_MARGV1_NFT_MANAGER"])
 
 # Example pool contract
-pool_example = Contract(os.environ["CONTRACT_ADDRESS_MRGLV1_POOL_EXAMPLE"])
+pool_example = Contract(os.environ["CONTRACT_ADDRESS_MARGV1_POOL_EXAMPLE"])
 
 # Multicall (mds1)
 # @dev Ref @mds1/multicall/src/Multicall3.sol

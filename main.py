@@ -176,7 +176,7 @@ def liquidate_positions(
             record["pool"],
             False,
             pool_example.liquidate.as_transaction(
-                context.state.recipient, manager.address, record["positionId"]
+                context.state.recipient, manager.address, int(record["positionId"])
             ).data,
         )
         for _, record in records.items()
@@ -197,14 +197,23 @@ def liquidate_positions(
 
 
 # This is how we trigger off of new blocks
-@app.on_(chain.blocks)
+@app.on_(chain.blocks, start_block=START_BLOCK)
 # context must be a type annotated kwarg to be provided to the task
 def exec_block(block: BlockAPI, context: Annotated[Context, TaskiqDepends()]):
     # TODO: chunk query?
     token_ids = _get_token_ids_in_db(context)
+
+    # short circuit if no token ids in db
+    if len(token_ids) == 0:
+        click.echo(f"No positions in db at block {block.number} ...")
+        context.state.signer_balance = app.signer.balance
+        context.state.block_count += 1
+        return len(block.transactions)
+
     click.echo(
         f"Fetching position updates at block {block.number} for tokenIds: {token_ids}"
     )
+
     positions = [manager.positions(token_id) for token_id in token_ids]
 
     click.echo(f"Updating positions at block {block.number} for tokenIds ...")

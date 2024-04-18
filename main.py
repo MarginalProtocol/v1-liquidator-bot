@@ -135,6 +135,10 @@ def _get_liquidatable_position_records_from_db(
 
 @app.on_startup()
 def app_startup(startup_state: SilverbackStartupState):
+    # set up autosign if desired
+    if click.confirm("Enable autosign?"):
+        app.signer.set_autosign(enabled=True)
+
     # TODO: process_history(start_block=startup_state.last_block_seen)
     return {"message": "Starting...", "block_number": startup_state.last_block_seen}
 

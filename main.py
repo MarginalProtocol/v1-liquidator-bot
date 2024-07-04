@@ -6,7 +6,7 @@ from typing import Annotated, Any, Dict, List, Tuple  # NOTE: Only Python 3.9+
 
 from ape import chain, Contract
 from ape.api import BlockAPI
-from ape.exceptions import ContractLogicError
+from ape.exceptions import TransactionError
 from ape.types import ContractLog
 from ape_aws.accounts import KmsAccount
 
@@ -42,6 +42,12 @@ MAX_FRACTION_GAS_LIMIT_DENOMINATOR = os.environ.get(
 
 # Recipient of liquidation rewards
 RECIPIENT_ADDRESS = os.environ.get("RECIPIENT_ADDRESS", None)
+
+# Whether to execute transaction through private mempool
+TXN_PRIVATE = os.environ.get("TXN_PRIVATE", False)
+
+# Required confirmations to wait for transaction to go through
+TXN_REQUIRED_CONFIRMATIONS = os.environ.get("TXN_REQUIRED_CONFIRMATIONS", 1)
 
 # Whether to ask to enable autosign for local account
 PROMPT_AUTOSIGN = app.signer and not isinstance(app.signer, KmsAccount)
@@ -169,6 +175,7 @@ def liquidate_positions(
     min_rewards = app.provider.base_fee * GAS_LIQUIDATE
     max_gas_limit = app.provider.max_gas // MAX_FRACTION_GAS_LIMIT_DENOMINATOR
     max_records = max_gas_limit // GAS_LIQUIDATE
+
     click.echo(f"Min rewards at block {block.number}: {min_rewards}")
     click.echo(f"Max records at block {block.number}: {max_records}")
 
@@ -176,7 +183,8 @@ def liquidate_positions(
         min_rewards, max_records, context
     )
     token_ids = list(records.keys())
-    click.echo(f"Liquidating positions with tokenIds: {token_ids}")
+    click.echo(f"Liquidatable token IDs: {token_ids}")
+
     if len(token_ids) == 0:
         return token_ids
 
@@ -195,12 +203,21 @@ def liquidate_positions(
 
     # preview before sending in case of revert
     try:
-        multicall3.aggregate3.estimate_gas_cost(calldata, sender=app.signer)
-        multicall3.aggregate3(calldata, sender=app.signer)
-    except ContractLogicError as err:
+        click.echo(
+            f"Submitting multicall liquidation transaction for token IDs: {token_ids}"
+        )
+        multicall3.aggregate3(
+            calldata,
+            sender=app.signer,
+            required_confirmations=TXN_REQUIRED_CONFIRMATIONS,
+            private=TXN_PRIVATE,
+        )
+    except TransactionError as err:
         # didn't liquidate any positions so reset tokenIds returned to empty
         click.secho(
-            f"Contract logic error when estimating gas: {err}", blink=True, bold=True
+            f"Transaction error: {err}",
+            blink=True,
+            bold=True,
         )
         token_ids = []
 

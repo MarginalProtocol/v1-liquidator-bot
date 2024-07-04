@@ -296,5 +296,5 @@ def worker_shutdown(state):
 
 # A final job to execute on Silverback shutdown
 @app.on_shutdown()
-def app_shutdown(state):
+def app_shutdown():
     return {"message": "Stopping..."}

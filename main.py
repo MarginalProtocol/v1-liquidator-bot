@@ -10,7 +10,7 @@ from ape.exceptions import ContractLogicError
 from ape.types import ContractLog
 from taskiq import Context, TaskiqDepends, TaskiqState
 
-from silverback import SilverbackApp, SilverbackStartupState
+from silverback import AppState, SilverbackApp
 
 # TODO: Remove once add DB with process history
 START_BLOCK = os.environ.get("START_BLOCK", None)
@@ -134,7 +134,7 @@ def _get_liquidatable_position_records_from_db(
 
 
 @app.on_startup()
-def app_startup(startup_state: SilverbackStartupState):
+def app_startup(startup_state: AppState):
     # set up autosign if desired
     if click.confirm("Enable autosign?"):
         app.signer.set_autosign(enabled=True)

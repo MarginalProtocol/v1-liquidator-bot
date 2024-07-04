@@ -8,9 +8,26 @@ from ape import chain, Contract
 from ape.api import BlockAPI
 from ape.exceptions import ContractLogicError
 from ape.types import ContractLog
+from ape_aws.accounts import KmsAccount
+
 from taskiq import Context, TaskiqDepends, TaskiqState
 
 from silverback import AppState, SilverbackApp
+
+
+# Do this to initialize your app
+app = SilverbackApp()
+
+
+# Nonfungible position manager contract
+manager = Contract(os.environ["CONTRACT_ADDRESS_MARGV1_NFT_MANAGER"])
+
+# Example pool contract
+pool_example = Contract(os.environ["CONTRACT_ADDRESS_MARGV1_POOL_EXAMPLE"])
+
+# Multicall (mds1)
+# @dev Ref @mds1/multicall/src/Multicall3.sol
+multicall3 = Contract("0xcA11bde05977b3631167028862bE2a173976CA11")
 
 # TODO: Remove once add DB with process history
 START_BLOCK = os.environ.get("START_BLOCK", None)
@@ -26,18 +43,8 @@ MAX_FRACTION_GAS_LIMIT_DENOMINATOR = os.environ.get(
 # Recipient of liquidation rewards
 RECIPIENT_ADDRESS = os.environ.get("RECIPIENT_ADDRESS", None)
 
-# Do this to initialize your app
-app = SilverbackApp()
-
-# Nonfungible position manager contract
-manager = Contract(os.environ["CONTRACT_ADDRESS_MARGV1_NFT_MANAGER"])
-
-# Example pool contract
-pool_example = Contract(os.environ["CONTRACT_ADDRESS_MARGV1_POOL_EXAMPLE"])
-
-# Multicall (mds1)
-# @dev Ref @mds1/multicall/src/Multicall3.sol
-multicall3 = Contract("0xcA11bde05977b3631167028862bE2a173976CA11")
+# Whether to ask to enable autosign for local account
+PROMPT_AUTOSIGN = app.signer and not isinstance(app.signer, KmsAccount)
 
 
 # Calculates the health factor for a position
@@ -136,7 +143,7 @@ def _get_liquidatable_position_records_from_db(
 @app.on_startup()
 def app_startup(startup_state: AppState):
     # set up autosign if desired
-    if click.confirm("Enable autosign?"):
+    if PROMPT_AUTOSIGN and click.confirm("Enable autosign?"):
         app.signer.set_autosign(enabled=True)
 
     # TODO: process_history(start_block=startup_state.last_block_seen)

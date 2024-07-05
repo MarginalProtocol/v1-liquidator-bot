@@ -34,14 +34,19 @@ START_BLOCK = os.environ.get("START_BLOCK", None)
 if START_BLOCK is not None:
     START_BLOCK = int(START_BLOCK)
 
+# Recipient of liquidation rewards
+RECIPIENT_ADDRESS = os.environ.get("RECIPIENT_ADDRESS", None)
+
 # Maximum fraction of gas limit to use for multicall liquidations expressed as denominator
-GAS_LIQUIDATE = 150_000
 MAX_FRACTION_GAS_LIMIT_DENOMINATOR = os.environ.get(
     "MAX_FRACTION_GAS_LIMIT_DENOMINATOR", 6
 )
 
-# Recipient of liquidation rewards
-RECIPIENT_ADDRESS = os.environ.get("RECIPIENT_ADDRESS", None)
+# Gas estimate for the pool liquidate function
+LIQUIDATE_GAS_ESTIMATE = 150_000
+
+# Buffer to add to transaction fee estimate: txn_fee *= 1 + BUFFER
+TXN_FEE_BUFFER = os.environ.get("TXN_FEE_BUFFER", 0.125)
 
 # Whether to execute transaction through private mempool
 TXN_PRIVATE = os.environ.get("TXN_PRIVATE", False)
@@ -146,6 +151,11 @@ def _get_liquidatable_position_records_from_db(
     return db_filtered.to_dict(orient="index")
 
 
+# Gets the transaction fee estimate to execute the liquidations
+def _get_txn_fee(block: BlockAPI, context: Annotated[Context, TaskiqDepends()]):
+    return int(block.base_fee * LIQUIDATE_GAS_ESTIMATE * (1 + TXN_FEE_BUFFER))
+
+
 @app.on_startup()
 def app_startup(startup_state: AppState):
     # set up autosign if desired
@@ -172,9 +182,9 @@ def worker_startup(state: TaskiqState):
 def liquidate_positions(
     block: BlockAPI, context: Annotated[Context, TaskiqDepends()]
 ) -> List[int]:
-    min_rewards = app.provider.base_fee * GAS_LIQUIDATE
+    min_rewards = _get_txn_fee(block, context)
     max_gas_limit = app.provider.max_gas // MAX_FRACTION_GAS_LIMIT_DENOMINATOR
-    max_records = max_gas_limit // GAS_LIQUIDATE
+    max_records = max_gas_limit // LIQUIDATE_GAS_ESTIMATE
 
     click.echo(f"Min rewards at block {block.number}: {min_rewards}")
     click.echo(f"Max records at block {block.number}: {max_records}")
@@ -215,7 +225,7 @@ def liquidate_positions(
     except TransactionError as err:
         # didn't liquidate any positions so reset tokenIds returned to empty
         click.secho(
-            f"Transaction error: {err}",
+            f"Transaction error on position liquidations: {err}",
             blink=True,
             bold=True,
         )
@@ -302,9 +312,11 @@ def exec_manager_mint(log: ContractLog, context: Annotated[Context, TaskiqDepend
                 _create_positions_in_db(entries, context)
             else:
                 _update_positions_in_db(entries, context)
-    except ContractLogicError as err:
+    except TransactionError as err:
         click.secho(
-            f"Contract logic error when getting position: {err}", blink=True, bold=True
+            f"Transaction error on mint event: {err}",
+            blink=True,
+            bold=True,
         )
     return {"token_id": log.tokenId, "position": position}
 

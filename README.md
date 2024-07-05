@@ -22,18 +22,15 @@ ape plugins install .
 
 ## Usage
 
-Include environment variables for the address of the [`NonfungiblePositionManager`](https://github.com/MarginalProtocol/book/blob/main/src/v1/periphery/contracts/NonfungiblePositionManager.sol/contract.NonfungiblePositionManager.md) contract
-and the address of an example [`MarginalV1Pool`](https://github.com/MarginalProtocol/book/blob/main/src/v1/core/contracts/MarginalV1Pool.sol/contract.MarginalV1Pool.md) contract verified on the network
+Include environment variables for the address of the [`PositionViewer`](https://github.com/MarginalProtocol/book/blob/main/src/v1/periphery/contracts/lens/PositionViewer.sol/contract.PositionViewer.md)
+and the address of the [`MarginalV1Pool`](https://github.com/MarginalProtocol/book/blob/main/src/v1/core/contracts/MarginalV1Pool.sol/contract.MarginalV1Pool.md) contract verified on the network
 
 ```sh
-export CONTRACT_ADDRESS_MARGV1_NFT_MANAGER=<address of nft manager contract on network>
-export CONTRACT_ADDRESS_MARGV1_POOL_EXAMPLE=<address of marginal v1 pool example contract on network>
+export CONTRACT_ADDRESS_POSITION_VIEWER=<address of the position viewer contract on network>
+export CONTRACT_ADDRESS_MARGV1_POOL=<address of marginal v1 pool contract on network>
 ```
 
-The latter is only used to more easily construct transaction calldata with `ape`, so can be any pool.
-
 Then run silverback
-
 
 ```sh
 silverback run "main:app" --network :mainnet:alchemy --account acct-name

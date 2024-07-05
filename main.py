@@ -18,12 +18,11 @@ from silverback import AppState, SilverbackApp
 # Do this to initialize your app
 app = SilverbackApp()
 
+# Position viewer contract
+position_viewer = Contract(os.environ["CONTRACT_ADDRESS_POSITION_VIEWER"])
 
-# Nonfungible position manager contract
-manager = Contract(os.environ["CONTRACT_ADDRESS_MARGV1_NFT_MANAGER"])
-
-# Example pool contract
-pool_example = Contract(os.environ["CONTRACT_ADDRESS_MARGV1_POOL_EXAMPLE"])
+# Marginal v1 pool contract
+pool = Contract(os.environ["CONTRACT_ADDRESS_MARGV1_POOL"])
 
 # Multicall (mds1)
 # @dev Ref @mds1/multicall/src/Multicall3.sol
@@ -67,81 +66,82 @@ def _get_health_factor(position: Any) -> float:
     )
 
 
-# @dev entries is list of tuples of (tokenId, result_position)
+# @dev entries is list of tuples of (owner, id, result_position)
 def _entries_to_data(entries: List[Tuple]) -> List[Dict]:
     data = []
-    for token_id, position in entries:
+    for owner, id, position in entries:
         d = position.__dict__
-        d.update({"tokenId": token_id, "healthFactor": _get_health_factor(position)})
+        d.update(
+            {
+                "owner": owner,
+                "id": id,
+                "healthFactor": _get_health_factor(position),
+            }
+        )
         data.append(d)
     return data
 
 
 # Has position in db
-def _has_position_in_db(
-    token_id: int, context: Annotated[Context, TaskiqDepends()]
-) -> bool:
-    return token_id in context.state.db.index
+def _has_position_in_db(id: int, context: Annotated[Context, TaskiqDepends()]) -> bool:
+    return id in context.state.db.index
 
 
 # Creates positions in db
-# @dev entries is list of tuples of (tokenId, result_position)
+# @dev entries is list of tuples of (owner, id, result_position)
 def _create_positions_in_db(
     entries: List[Tuple], context: Annotated[Context, TaskiqDepends()]
 ):
-    token_ids = [token_id for token_id, _ in entries]
-    for token_id in token_ids:
-        if token_id in context.state.db.index:
-            raise Exception(f"tokenId {token_id} already exists in DB")
-
     data = _entries_to_data(entries)
     df = pd.DataFrame(data)
-    df = df.set_index("tokenId")
+    df = df.set_index("id")
 
     context.state.db = pd.concat([context.state.db, df])
     context.state.db.sort_values(by=["healthFactor"], inplace=True)
-    click.echo(f"Created DB entries for tokenIds {token_ids}: {context.state.db}")
+    click.echo(f"Created DB entries for {len(entries)} entries: {context.state.db}")
 
 
 # Updates positions in db
-# @dev entries is list of tuples of (tokenId, result_position)
+# @dev entries is list of tuples of (owner, id, result_position)
 def _update_positions_in_db(
     entries: List[Tuple], context: Annotated[Context, TaskiqDepends()]
 ):
-    token_ids = [token_id for token_id, _ in entries]
-    context.state.db.loc[token_ids]  # reverts with key error if not all exist
+    ids = [id for owner, id, _ in entries]
+    context.state.db.loc[ids]  # reverts with key error if not all exist
 
     data = _entries_to_data(entries)
     df = pd.DataFrame(data)
-    df = df.set_index("tokenId")
+    df = df.set_index("id")
 
     context.state.db.update(df)
     context.state.db.sort_values(by=["healthFactor"], inplace=True)
-    click.echo(f"Updated DB entries for tokenIds {token_ids}: {context.state.db}")
+    click.echo(f"Updated DB entries for {len(entries)} entries: {context.state.db}")
 
 
 # Deletes positions from db
 def _delete_positions_from_db(
-    entries: List[Tuple], context: Annotated[Context, TaskiqDepends()]
+    ids: List[int], context: Annotated[Context, TaskiqDepends()]
 ):
-    token_ids = [token_id for token_id, _ in entries]
-    token_ids_to_keep = [
-        token_id for token_id in context.state.db.index if token_id not in token_ids
-    ]
-    context.state.db = context.state.db.loc[token_ids_to_keep]
-    click.echo(f"Deleted DB entries for tokenIds {token_ids}: {context.state.db}")
+    ids_to_keep = [id for id in context.state.db.index if id not in ids]
+    context.state.db = context.state.db.loc[ids_to_keep]
+    click.echo(f"Deleted DB entries for {len(ids)} entries: {context.state.db}")
 
 
-# Gets a list of the token IDs stored in the db
-def _get_token_ids_in_db(context: Annotated[Context, TaskiqDepends()]) -> List[int]:
-    return context.state.db.index.to_list()
+# Gets a list of the position IDs and associated owners stored in the db
+# @dev Returned entry keys is tuple of lists of (owners, ids)
+def _get_position_entry_keys_in_db(
+    context: Annotated[Context, TaskiqDepends()]
+) -> Tuple[List[str], List[int]]:
+
+    owners = context.state.db["owner"].to_list()
+    ids = context.state.db["id"].to_list()
+    return (owners, ids)
 
 
 # Gets a list of unsafe and profitable to liquidate positions from db, returning df records {"index": {"column": "value"}}
 def _get_liquidatable_position_records_from_db(
     min_rewards: int, max_records: int, context: Annotated[Context, TaskiqDepends()]
 ) -> Dict:
-    # TODO: accomodate non-manager positions in bot via owner != manager.address
     db_filtered = context.state.db[
         (~context.state.db["safe"]) & (context.state.db["rewards"] >= min_rewards)
     ].head(max_records)
@@ -178,7 +178,7 @@ def worker_startup(state: TaskiqState):
     return {"message": "Worker started."}
 
 
-# Profitably liquidates unsafe positions on pools via multicall, returning list of tokenIds liquidated
+# Profitably liquidates unsafe positions on pools via multicall, returning list of position IDs liquidated
 def liquidate_positions(
     block: BlockAPI, context: Annotated[Context, TaskiqDepends()]
 ) -> List[int]:
@@ -192,11 +192,11 @@ def liquidate_positions(
     records = _get_liquidatable_position_records_from_db(
         min_rewards, max_records, context
     )
-    token_ids = list(records.keys())
-    click.echo(f"Liquidatable token IDs: {token_ids}")
+    ids = list(records.keys())
+    click.echo(f"Liquidatable position IDs: {ids}")
 
-    if len(token_ids) == 0:
-        return token_ids
+    if len(ids) == 0:
+        return ids
 
     # format into multicall3 calldata: (address target, bool allowFailure, bytes callData)
     # each calls to pool.liquidate(address recipient, address owner, uint96 id)
@@ -204,8 +204,10 @@ def liquidate_positions(
         (
             record["pool"],
             False,
-            pool_example.liquidate.as_transaction(
-                context.state.recipient, manager.address, int(record["positionId"])
+            pool.liquidate.as_transaction(
+                context.state.recipient,
+                record["owner"],
+                int(record["id"]),
             ).data,
         )
         for _, record in records.items()
@@ -214,7 +216,7 @@ def liquidate_positions(
     # preview before sending in case of revert
     try:
         click.echo(
-            f"Submitting multicall liquidation transaction for token IDs: {token_ids}"
+            f"Submitting multicall liquidation transaction for position IDs: {ids}"
         )
         multicall3.aggregate3(
             calldata,
@@ -223,15 +225,15 @@ def liquidate_positions(
             private=TXN_PRIVATE,
         )
     except TransactionError as err:
-        # didn't liquidate any positions so reset tokenIds returned to empty
+        # didn't liquidate any positions so reset position IDs returned to empty
         click.secho(
             f"Transaction error on position liquidations: {err}",
             blink=True,
             bold=True,
         )
-        token_ids = []
+        ids = []
 
-    return token_ids
+    return ids
 
 
 # This is how we trigger off of new blocks
@@ -239,76 +241,80 @@ def liquidate_positions(
 # context must be a type annotated kwarg to be provided to the task
 def exec_block(block: BlockAPI, context: Annotated[Context, TaskiqDepends()]):
     # TODO: chunk query?
-    token_ids = _get_token_ids_in_db(context)
+    # @dev entry keys is list of lists of [owner, id]
+    owners, ids = _get_position_entry_keys_in_db(context)
 
-    # short circuit if no token ids in db
-    if len(token_ids) == 0:
+    # short circuit if no position ids in db
+    if len(ids) == 0:
         click.echo(f"No positions in db at block {block.number} ...")
         context.state.signer_balance = app.signer.balance
         context.state.block_count += 1
         return len(block.transactions)
 
     click.echo(
-        f"Fetching position updates at block {block.number} for tokenIds: {token_ids}"
+        f"Fetching position updates at block {block.number} for position IDs: {ids}"
     )
 
-    positions = [manager.positions(token_id) for token_id in token_ids]
+    positions = [
+        position_viewer.positions(pool.address, owner, id)
+        for owner, id in list(zip(owners, ids))
+    ]
 
-    click.echo(f"Updating positions at block {block.number} for tokenIds ...")
-    entries = list(zip(token_ids, positions))
-    click.echo(f"Entries tokenIds fetched: {token_ids}")
+    click.echo(f"Updating positions at block {block.number} for position keys ...")
+    entries = list(zip(owners, ids, positions))
 
     # remove liquidated positions from DB
     entries_liquidated = list(filter(lambda e: e[1].liquidated, entries))
-    click.echo(
-        f"Liquidated entries tokenIds to delete from DB: {[token_id for token_id, _ in entries_liquidated]}"
-    )
-    _delete_positions_from_db(entries_liquidated, context)
+    ids_liquidated = [id for _, id, _ in entries_liquidated]
+    click.echo(f"Liquidated entries position IDs to delete from DB: {ids_liquidated}")
+    _delete_positions_from_db(ids_liquidated, context)
 
     # update non liquidated positions in DB
     entries_updated = list(filter(lambda e: (not e[1].liquidated), entries))
     click.echo(
-        f"Synced entries tokenIds to update in DB: {[token_id for token_id, _ in entries_updated]}"
+        f"Synced entries position IDs to update in DB: {[id for _, id, _ in entries_updated]}"
     )
     _update_positions_in_db(entries_updated, context)
 
     # multicall liquidate calls to chain
-    token_ids_liquidated = liquidate_positions(block, context)
+    ids_liquidated_by_bot = liquidate_positions(block, context)
 
     # remove additional successful liquidations caused by bot from db
-    entries_liquidated_by_bot = list(
-        filter(lambda e: (e[0] in token_ids_liquidated), entries_updated)
-    )
     click.echo(
-        f"Liquidated by bot entries tokenIds to delete from DB: {[token_id for token_id, _ in entries_liquidated_by_bot]}"
+        f"Liquidated by bot entries position IDs to delete from DB: {ids_liquidated_by_bot}"
     )
-    _delete_positions_from_db(entries_liquidated_by_bot, context)
+    _delete_positions_from_db(ids_liquidated_by_bot, context)
 
     context.state.signer_balance = app.signer.balance
     context.state.block_count += 1
-    return len(block.transactions)
+    return {
+        "block_count": context.state.block_count,
+        "signer_balance": context.state.signer_balance,
+        "positions_count": len(entries_updated) - len(ids_liquidated_by_bot),
+    }
 
 
 # This is how we trigger off of events
 # Set new_block_timeout to adjust the expected block time.
-# TODO: remove start block once process history implemented
-@app.on_(manager.Mint, start_block=START_BLOCK)
-def exec_manager_mint(log: ContractLog, context: Annotated[Context, TaskiqDepends()]):
+@app.on_(pool.Open, start_block=START_BLOCK)
+def exec_pool_open(log: ContractLog, context: Annotated[Context, TaskiqDepends()]):
     click.echo(
-        f"Manager minted position with tokenId {log.tokenId} at block {log.block_number}."
+        f"Pool opened position with owner {log.owner} and ID {log.id} at block {log.block_number}."
     )
     position = None
     try:
-        position = manager.positions(log.tokenId)
+        position = position_viewer.positions(pool.address, log.owner, log.id)
         click.echo(f"Position currently has attributes: {position}")
         health_factor = _get_health_factor(position)
         click.echo(f"Position current health factor: {health_factor}")
 
         # add to DB if not yet liquidated
         if not position.liquidated:
-            click.echo(f"Adding position with tokenId {log.tokenId} to database ...")
-            entries = [(log.tokenId, position)]
-            if not _has_position_in_db(log.tokenId, context):
+            click.echo(
+                f"Adding position with owner {log.owner} and ID {log.id} to database ..."
+            )
+            entries = [(log.owner, log.id, position)]
+            if not _has_position_in_db(log.id, context):
                 _create_positions_in_db(entries, context)
             else:
                 _update_positions_in_db(entries, context)
@@ -318,7 +324,8 @@ def exec_manager_mint(log: ContractLog, context: Annotated[Context, TaskiqDepend
             blink=True,
             bold=True,
         )
-    return {"token_id": log.tokenId, "position": position}
+
+    return {"owner": log.owner, "id": log.id, "position": position}
 
 
 # Just in case you need to release some resources or something

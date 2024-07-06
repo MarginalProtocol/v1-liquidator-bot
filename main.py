@@ -33,6 +33,9 @@ START_BLOCK = os.environ.get("START_BLOCK", None)
 if START_BLOCK is not None:
     START_BLOCK = int(START_BLOCK)
 
+# Filepath to persistant storage
+STORAGE_FILEPATH = os.environ.get("STORAGE_FILEPATH", ".db/storage.csv")
+
 # Recipient of liquidation rewards
 RECIPIENT_ADDRESS = os.environ.get("RECIPIENT_ADDRESS", None)
 
@@ -80,6 +83,20 @@ def _entries_to_data(entries: List[Tuple]) -> List[Dict]:
         )
         data.append(d)
     return data
+
+
+# Loads state of db from persistent storage
+def _load_db() -> pd.DataFrame:
+    return (
+        pd.read_csv(STORAGE_FILEPATH, index_col="id")
+        if os.path.exists(STORAGE_FILEPATH)
+        else pd.DataFrame()
+    )
+
+
+# Saves state of db to persistent storage
+def _save_db(context: Annotated[Context, TaskiqDepends()]):
+    context.state.db.to_csv(STORAGE_FILEPATH)
 
 
 # Has position in db
@@ -136,7 +153,7 @@ def _get_position_entry_keys_in_db(
         return ([], [])
 
     owners = context.state.db["owner"].to_list()
-    ids = context.state.db["id"].to_list()
+    ids = context.state.db.index.to_list()
     return (owners, ids)
 
 
@@ -172,7 +189,7 @@ def app_startup(startup_state: AppState):
 @app.on_worker_startup()
 def worker_startup(state: TaskiqState):
     state.block_count = 0
-    state.db = pd.DataFrame()  # in memory DB for now
+    state.db = _load_db()  # in memory verison of DB for now
     state.recipient = (
         RECIPIENT_ADDRESS if RECIPIENT_ADDRESS is not None else app.signer.address
     )
@@ -209,10 +226,10 @@ def liquidate_positions(
             pool.liquidate.as_transaction(
                 context.state.recipient,
                 record["owner"],
-                int(record["id"]),
+                id,
             ).data,
         )
-        for _, record in records.items()
+        for id, record in records.items()
     ]
 
     # preview before sending in case of revert
@@ -266,13 +283,13 @@ def exec_block(block: BlockAPI, context: Annotated[Context, TaskiqDepends()]):
     entries = list(zip(owners, ids, positions))
 
     # remove liquidated positions from DB
-    entries_liquidated = list(filter(lambda e: e[1].liquidated, entries))
+    entries_liquidated = list(filter(lambda e: e[2].liquidated, entries))
     ids_liquidated = [id for _, id, _ in entries_liquidated]
     click.echo(f"Liquidated entries position IDs to delete from DB: {ids_liquidated}")
     _delete_positions_from_db(ids_liquidated, context)
 
     # update non liquidated positions in DB
-    entries_updated = list(filter(lambda e: (not e[1].liquidated), entries))
+    entries_updated = list(filter(lambda e: (not e[2].liquidated), entries))
     click.echo(
         f"Synced entries position IDs to update in DB: {[id for _, id, _ in entries_updated]}"
     )
@@ -286,6 +303,10 @@ def exec_block(block: BlockAPI, context: Annotated[Context, TaskiqDepends()]):
         f"Liquidated by bot entries position IDs to delete from DB: {ids_liquidated_by_bot}"
     )
     _delete_positions_from_db(ids_liquidated_by_bot, context)
+
+    # save updated state of in memory db to persistent storage
+    click.echo("Saving updated state of DB to persistent storage ...")
+    _save_db(context)
 
     context.state.signer_balance = app.signer.balance
     context.state.block_count += 1
@@ -320,6 +341,10 @@ def exec_pool_open(log: ContractLog, context: Annotated[Context, TaskiqDepends()
                 _create_positions_in_db(entries, context)
             else:
                 _update_positions_in_db(entries, context)
+
+            # save updated state of in memory db to persistent storage
+            click.echo("Saving updated state of DB to persistent storage ...")
+            _save_db(context)
     except TransactionError as err:
         click.secho(
             f"Transaction error on mint event: {err}",

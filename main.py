@@ -132,6 +132,8 @@ def _delete_positions_from_db(
 def _get_position_entry_keys_in_db(
     context: Annotated[Context, TaskiqDepends()]
 ) -> Tuple[List[str], List[int]]:
+    if context.state.db.empty:
+        return ([], [])
 
     owners = context.state.db["owner"].to_list()
     ids = context.state.db["id"].to_list()
@@ -237,11 +239,11 @@ def liquidate_positions(
 
 
 # This is how we trigger off of new blocks
-@app.on_(chain.blocks, start_block=START_BLOCK)
+@app.on_(chain.blocks)
 # context must be a type annotated kwarg to be provided to the task
 def exec_block(block: BlockAPI, context: Annotated[Context, TaskiqDepends()]):
     # TODO: chunk query?
-    # @dev entry keys is list of lists of [owner, id]
+    # @dev entry keys is tuple of lists of (owners, ids)
     owners, ids = _get_position_entry_keys_in_db(context)
 
     # short circuit if no position ids in db

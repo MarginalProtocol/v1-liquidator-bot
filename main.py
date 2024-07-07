@@ -221,7 +221,7 @@ def liquidate_positions(
     # each calls to pool.liquidate(address recipient, address owner, uint96 id)
     calldata = [
         (
-            record["pool"],
+            pool.address,
             False,
             pool.liquidate.as_transaction(
                 context.state.recipient,

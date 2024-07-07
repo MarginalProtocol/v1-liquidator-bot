@@ -2,6 +2,7 @@
 .build/
 .cache/
 .coverage
+.db/
 
 # Python
 .env

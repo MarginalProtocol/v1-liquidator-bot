@@ -9,7 +9,9 @@ from ape import chain, Contract
 from ape.api import BlockAPI
 from ape.exceptions import TransactionError
 from ape.types import ContractLog
+
 from ape_aws.accounts import KmsAccount
+from ape_ethereum import multicall
 
 from taskiq import Context, TaskiqDepends, TaskiqState
 
@@ -24,10 +26,6 @@ position_viewer = Contract(os.environ["CONTRACT_ADDRESS_POSITION_VIEWER"])
 
 # Marginal v1 pool contract
 pool = Contract(os.environ["CONTRACT_ADDRESS_MARGV1_POOL"])
-
-# Multicall (mds1)
-# @dev Ref @mds1/multicall/src/Multicall3.sol
-multicall3 = Contract("0xcA11bde05977b3631167028862bE2a173976CA11")
 
 # Start block to process history at if no block persistent storage yet
 START_BLOCK = int(os.environ.get("START_BLOCK", chain.blocks.head.number))
@@ -272,28 +270,18 @@ def liquidate_positions(block: BlockAPI, db: pd.DataFrame, recipient: str) -> Li
     if len(ids) == 0:
         return ids
 
-    # format into multicall3 calldata: (address target, bool allowFailure, bytes callData)
     # each calls to pool.liquidate(address recipient, address owner, uint96 id)
-    calldata = [
-        (
-            pool.address,
-            False,
-            pool.liquidate.as_transaction(
-                recipient,
-                record["owner"],
-                id,
-            ).data,
-        )
-        for id, record in records.items()
-    ]
+    txn = multicall.Transaction()
+    for id, record in records.items():
+        args = (recipient, record["owner"], id)
+        txn.add(pool.liquidate, *args, allowFailure=False)
 
     # preview before sending in case of revert
     try:
         click.echo(
             f"Submitting multicall liquidation transaction for position IDs: {ids}"
         )
-        multicall3.aggregate3(
-            calldata,
+        txn(
             sender=app.signer,
             required_confirmations=TXN_REQUIRED_CONFIRMATIONS,
             private=TXN_PRIVATE,
@@ -332,11 +320,12 @@ def exec_block(block: BlockAPI, context: Annotated[Context, TaskiqDepends()]):
     click.echo(
         f"Fetching position updates at block {block.number} for position IDs: {ids}"
     )
+    call = multicall.Call()
+    for owner, id in list(zip(owners, ids)):
+        args = (pool.address, owner, id)
+        call.add(position_viewer.positions, *args)
 
-    positions = [
-        position_viewer.positions(pool.address, owner, id)
-        for owner, id in list(zip(owners, ids))
-    ]
+    positions = [p for p in call()]
 
     click.echo(f"Updating positions at block {block.number} for position keys ...")
     entries = list(zip(owners, ids, positions))

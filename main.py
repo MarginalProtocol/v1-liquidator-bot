@@ -9,7 +9,9 @@ from ape import chain, Contract
 from ape.api import BlockAPI
 from ape.exceptions import TransactionError
 from ape.types import ContractLog
+
 from ape_aws.accounts import KmsAccount
+from ape_ethereum import multicall
 
 from taskiq import Context, TaskiqDepends, TaskiqState
 
@@ -332,11 +334,12 @@ def exec_block(block: BlockAPI, context: Annotated[Context, TaskiqDepends()]):
     click.echo(
         f"Fetching position updates at block {block.number} for position IDs: {ids}"
     )
+    call = multicall.Call()
+    for owner, id in list(zip(owners, ids)):
+        args = (pool.address, owner, id)
+        call.add(position_viewer.positions, *args)
 
-    positions = [
-        position_viewer.positions(pool.address, owner, id)
-        for owner, id in list(zip(owners, ids))
-    ]
+    positions = [p for p in call()]
 
     click.echo(f"Updating positions at block {block.number} for position keys ...")
     entries = list(zip(owners, ids, positions))

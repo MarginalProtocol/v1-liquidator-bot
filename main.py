@@ -40,21 +40,21 @@ BLOCK_FILEPATH = os.environ.get("BLOCK_FILEPATH", ".db/block.csv")
 RECIPIENT_ADDRESS = os.environ.get("RECIPIENT_ADDRESS", None)
 
 # Maximum fraction of gas limit to use for multicall liquidations expressed as denominator
-MAX_FRACTION_GAS_LIMIT_DENOMINATOR = os.environ.get(
-    "MAX_FRACTION_GAS_LIMIT_DENOMINATOR", 6
+MAX_FRACTION_GAS_LIMIT_DENOMINATOR = int(
+    os.environ.get("MAX_FRACTION_GAS_LIMIT_DENOMINATOR", 6)
 )
 
 # Gas estimate for the pool liquidate function
 LIQUIDATE_GAS_ESTIMATE = 150_000
 
 # Buffer to add to transaction fee estimate: txn_fee *= 1 + BUFFER
-TXN_FEE_BUFFER = os.environ.get("TXN_FEE_BUFFER", 0.125)
+TXN_FEE_BUFFER = float(os.environ.get("TXN_FEE_BUFFER", 0.125))
 
 # Whether to execute transaction through private mempool
-TXN_PRIVATE = os.environ.get("TXN_PRIVATE", False)
+TXN_PRIVATE = os.environ.get("TXN_PRIVATE", "False") == "True"
 
 # Required confirmations to wait for transaction to go through
-TXN_REQUIRED_CONFIRMATIONS = os.environ.get("TXN_REQUIRED_CONFIRMATIONS", 1)
+TXN_REQUIRED_CONFIRMATIONS = int(os.environ.get("TXN_REQUIRED_CONFIRMATIONS", 1))
 
 # Whether to ask to enable autosign for local account
 PROMPT_AUTOSIGN = app.signer and not isinstance(app.signer, KmsAccount)

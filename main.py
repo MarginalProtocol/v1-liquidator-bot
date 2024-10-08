@@ -62,11 +62,7 @@ PROMPT_AUTOSIGN = app.signer and not isinstance(app.signer, KmsAccount)
 
 # Calculates the health factor for a position
 def _get_health_factor(position: Any) -> float:
-    return (
-        position.margin / position.safeMarginMinimum
-        if position.safeMarginMinimum > 0
-        else 0
-    )
+    return position.healthFactor / int(1e18)
 
 
 # @dev entries is list of tuples of (owner, id, result_position)
@@ -74,13 +70,7 @@ def _entries_to_data(entries: List[Tuple]) -> List[Dict]:
     data = []
     for owner, id, position in entries:
         d = position.__dict__
-        d.update(
-            {
-                "owner": owner,
-                "id": id,
-                "healthFactor": _get_health_factor(position),
-            }
-        )
+        d.update({"owner": owner, "id": id})
         data.append(d)
     return data
 
@@ -96,7 +86,7 @@ def _load_db() -> pd.DataFrame:
         "safe": bool,
         "rewards": np.int64,
         "owner": object,
-        "healthFactor": np.float64,
+        "healthFactor": np.int64,
     }
     return (
         pd.read_csv(STORAGE_FILEPATH, index_col="id", dtype=dtype)

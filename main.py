@@ -155,7 +155,9 @@ def _has_position_in_db(id: int, db: pd.DataFrame) -> bool:
 def _create_positions_in_db(entries: List[Tuple], db: pd.DataFrame) -> pd.DataFrame:
     data = _entries_to_data(entries)
     df = pd.DataFrame(data)
-    df = df.set_index("id")
+
+    if not df.empty:
+        df = df.set_index("id")
 
     db = pd.concat([db, df])
     db.sort_values(by=["healthFactor"], inplace=True)
@@ -172,7 +174,9 @@ def _update_positions_in_db(entries: List[Tuple], db: pd.DataFrame) -> pd.DataFr
 
     data = _entries_to_data(entries)
     df = pd.DataFrame(data)
-    df = df.set_index("id")
+
+    if not df.empty:
+        df = df.set_index("id")
 
     db.update(df)
     db.sort_values(by=["healthFactor"], inplace=True)

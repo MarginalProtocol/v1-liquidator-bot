@@ -47,6 +47,9 @@ MAX_FRACTION_GAS_LIMIT_DENOMINATOR = int(
 # Gas estimate for the pool liquidate function
 LIQUIDATE_GAS_ESTIMATE = 150_000
 
+# Seconds ago constants to attempt for oracle TWAP when calculating safety attributes
+SECONDS_AGOS = [43200, 21600, 10800]
+
 # Buffer to add to transaction fee estimate: txn_fee *= 1 + BUFFER
 TXN_FEE_BUFFER = float(os.environ.get("TXN_FEE_BUFFER", 0.125))
 
@@ -248,6 +251,27 @@ def worker_startup(state: TaskiqState):
     return {"message": "Worker started."}
 
 
+# Fetch updated positions for db keys from chain via position viewer
+# @dev If returned list is empty, multicall to fetch positions failed on multiple attempts
+def fetch_positions(owners: List[str], ids: List[int]) -> List:
+    positions = []
+    # retry logic to fetch for multiple oracle averaging times in case extreme number
+    # of oracle observation writes occurring at the moment (revert OLD can occur)
+    for seconds_ago in SECONDS_AGOS:
+        click.echo(f"Attempting to fetch positions with seconds ago {seconds_ago} ...")
+        call = multicall.Call()
+        for owner, id in list(zip(owners, ids)):
+            args = (pool.address, owner, id, seconds_ago)
+            call.add(position_viewer.positions, *args)
+
+        positions = [p for p in call() if p is not None]
+        if len(positions) > 0:
+            click.echo(f"Positions currently have attributes: {positions}")
+            break
+
+    return positions
+
+
 # Profitably liquidates unsafe positions on pools via multicall, returning list of position IDs liquidated
 def liquidate_positions(block: BlockAPI, db: pd.DataFrame, recipient: str) -> List[int]:
     min_rewards = _get_txn_fee(block)
@@ -314,12 +338,14 @@ def exec_block(block: BlockAPI, context: Annotated[Context, TaskiqDepends()]):
     click.echo(
         f"Fetching position updates at block {block.number} for position IDs: {ids}"
     )
-    call = multicall.Call()
-    for owner, id in list(zip(owners, ids)):
-        args = (pool.address, owner, id)
-        call.add(position_viewer.positions, *args)
-
-    positions = [p for p in call()]
+    positions = fetch_positions(owners, ids)
+    if len(positions) == 0:
+        # failed to fetch positions via multicall so pass
+        return {
+            "block_count": context.state.block_count,
+            "signer_balance": context.state.signer_balance,
+            "positions_count": len(ids),
+        }
 
     click.echo(f"Updating positions at block {block.number} for position keys ...")
     entries = list(zip(owners, ids, positions))
@@ -377,20 +403,8 @@ def _get_position_entry_from_log(log: ContractLog) -> Tuple:
     click.echo(
         f"Getting entry data for pool.Open contract log on position with owner {log.owner} and ID {log.id} at block {log.block_number}."
     )
-    position = None
-    try:
-        position = position_viewer.positions(pool.address, log.owner, log.id)
-        click.echo(f"Position currently has attributes: {position}")
-
-        health_factor = _get_health_factor(position)
-        click.echo(f"Position current health factor: {health_factor}")
-    except TransactionError as err:
-        click.secho(
-            f"Transaction error getting position from viewer: {err}",
-            blink=True,
-            bold=True,
-        )
-
+    positions = fetch_positions([log.owner], [log.id])
+    position = positions[0] if len(positions) > 0 else None
     return (log.owner, log.id, position)
 
 
